@@ -1,4 +1,5 @@
 import Entry from '../models/Entry.js'
+import Expense from '../models/Expense.js'
 
 const normalizeNumber = (value) => {
   if (value === '' || value === null || value === undefined) return 0
@@ -151,68 +152,121 @@ export const getSummary = async (req, res) => {
   try {
     const filter = buildDateFilter(req.query)
 
-    const entries = await Entry.find(filter).sort({ date: 1 })
+    const [entries, standaloneExpenses] = await Promise.all([
+      Entry.find(filter).sort({ date: 1 }),
+      Expense.find(filter).sort({ date: 1 })
+    ])
 
     const totals = entries.reduce(
       (acc, e) => {
-        acc.totalOrders += e.orders
-        acc.totalRevenue += e.revenue
-        acc.grossProfit += e.grossProfit
-        acc.totalDeliveryCost += e.totalDeliveryCost
-        acc.totalPackagingCost += e.totalPackagingCost
-        acc.totalAdsExpense += e.adsExpense
-        acc.totalOtherExpenses += e.otherExpenses
-        acc.totalExpenses += e.totalExpenses
-        acc.netProfitLoss += e.netProfitLoss
+        acc.totalOrders += Number(e.orders || 0)
+        acc.totalRevenue += Number(e.revenue || 0)
+        acc.grossProfit += Number(e.grossProfit || 0)
+        acc.legacyDeliveryCost += Number(e.totalDeliveryCost || 0)
+        acc.legacyPackagingCost += Number(e.totalPackagingCost || 0)
+        acc.legacyAdsExpense += Number(e.adsExpense || 0)
+        acc.legacyOtherExpenses += Number(e.otherExpenses || 0)
+        acc.legacyTotalExpenses += Number(e.totalExpenses || 0)
         return acc
       },
       {
         totalOrders: 0,
         totalRevenue: 0,
         grossProfit: 0,
-        totalDeliveryCost: 0,
-        totalPackagingCost: 0,
-        totalAdsExpense: 0,
-        totalOtherExpenses: 0,
-        totalExpenses: 0,
-        netProfitLoss: 0
+        legacyDeliveryCost: 0,
+        legacyPackagingCost: 0,
+        legacyAdsExpense: 0,
+        legacyOtherExpenses: 0,
+        legacyTotalExpenses: 0
       }
     )
 
+    // Aggregate standalone expenses by category
+    const categoryTotals = {
+      ads: totals.legacyAdsExpense,
+      packaging: totals.legacyPackagingCost,
+      delivery: totals.legacyDeliveryCost,
+      supplies: 0,
+      utilities: 0,
+      salaries: 0,
+      other: totals.legacyOtherExpenses
+    }
+
+    let standaloneTotal = 0
+    standaloneExpenses.forEach((exp) => {
+      const cat = (exp.category || 'other').toLowerCase()
+      const amt = Number(exp.amount || 0)
+      standaloneTotal += amt
+      if (categoryTotals[cat] !== undefined) {
+        categoryTotals[cat] += amt
+      } else {
+        categoryTotals.other += amt
+      }
+    })
+
+    const totalExpenses = totals.legacyTotalExpenses + standaloneTotal
+    const netProfitLoss = totals.grossProfit - totalExpenses
+
     const daysCount = entries.length
     const avgOrderValue = totals.totalOrders > 0 ? totals.totalRevenue / totals.totalOrders : 0
-    const avgDailyProfit = daysCount > 0 ? totals.netProfitLoss / daysCount : 0
-    const profitableDays = entries.filter((e) => e.netProfitLoss > 0).length
-    const lossDays = entries.filter((e) => e.netProfitLoss < 0).length
+    const avgDailyProfit = daysCount > 0 ? netProfitLoss / daysCount : 0
 
-    // Day-by-day series for the trend chart (already sorted ascending by date)
-    const series = entries.map((e) => ({
-      date: e.date,
-      orders: e.orders,
-      revenue: e.revenue,
-      totalExpenses: e.totalExpenses,
-      netProfitLoss: e.netProfitLoss
-    }))
+    // Day-by-day expense map for combining into series
+    const expensesByDay = {}
+    standaloneExpenses.forEach((exp) => {
+      const dayKey = new Date(exp.date).toISOString().slice(0, 10)
+      expensesByDay[dayKey] = (expensesByDay[dayKey] || 0) + Number(exp.amount || 0)
+    })
 
-    // Expense breakdown for the pie/bar chart
+    // Day-by-day series for the trend chart
+    const series = entries.map((e) => {
+      const dayKey = new Date(e.date).toISOString().slice(0, 10)
+      const dayStandaloneExpense = expensesByDay[dayKey] || 0
+      const dayTotalExpenses = Number(e.totalExpenses || 0) + dayStandaloneExpense
+      const dayNetProfit = Number(e.grossProfit || 0) - dayTotalExpenses
+
+      return {
+        date: e.date,
+        orders: e.orders,
+        revenue: e.revenue,
+        grossProfit: e.grossProfit,
+        totalExpenses: dayTotalExpenses,
+        netProfitLoss: dayNetProfit
+      }
+    })
+
+    const profitableDays = series.filter((e) => e.netProfitLoss > 0).length
+    const lossDays = series.filter((e) => e.netProfitLoss < 0).length
+
+    // Expense breakdown for the donut/pie chart
     const expenseBreakdown = [
-      { name: 'Delivery', value: totals.totalDeliveryCost },
-      { name: 'Packaging', value: totals.totalPackagingCost },
-      { name: 'Ads', value: totals.totalAdsExpense },
-      { name: 'Other', value: totals.totalOtherExpenses }
-    ]
+      { name: 'Ads', value: categoryTotals.ads },
+      { name: 'Packaging', value: categoryTotals.packaging },
+      { name: 'Delivery', value: categoryTotals.delivery },
+      { name: 'Supplies', value: categoryTotals.supplies },
+      { name: 'Utilities', value: categoryTotals.utilities },
+      { name: 'Salaries', value: categoryTotals.salaries },
+      { name: 'Other', value: categoryTotals.other }
+    ].filter((item) => item.value > 0)
 
     res.status(200).json({
       success: true,
       data: {
-        ...totals,
+        totalOrders: totals.totalOrders,
+        totalRevenue: totals.totalRevenue,
+        grossProfit: totals.grossProfit,
+        totalExpenses,
+        totalAdsExpense: categoryTotals.ads,
+        totalPackagingCost: categoryTotals.packaging,
+        totalDeliveryCost: categoryTotals.delivery,
+        netProfitLoss,
         daysCount,
         avgOrderValue,
         avgDailyProfit,
         profitableDays,
         lossDays,
         series,
-        expenseBreakdown
+        expenseBreakdown: expenseBreakdown.length > 0 ? expenseBreakdown : [{ name: 'No Expenses', value: 0 }]
       }
     })
   } catch (error) {
