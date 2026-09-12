@@ -10,7 +10,7 @@ const app = express()
 // ── Middleware ──
 const defaultOrigins = [
   'https://dashboardbyalvi.netlify.app',
-  'http://localhost:5173'
+  'http://localhost:5173', 'https://meatdashboard.netlify.app'
 ]
 const allowedOrigins = (process.env.CLIENT_ORIGIN || defaultOrigins.join(','))
   .split(',')
