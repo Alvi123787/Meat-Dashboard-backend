@@ -9,26 +9,53 @@ const app = express()
 
 // ── Middleware ──
 const defaultOrigins = [
+  'https://meatdashboard.netlify.app',
   'https://dashboardbyalvi.netlify.app',
-  'http://localhost:5173', 'https://meatdashboard.netlify.app'
+  'http://localhost:5173',
+  'http://localhost:3000'
 ]
+
+const normalizeOrigin = (o) => (o || '').trim().replace(/\/+$/, '')
+
 const allowedOrigins = (process.env.CLIENT_ORIGIN || defaultOrigins.join(','))
   .split(',')
-  .map((o) => o.trim())
+  .map(normalizeOrigin)
   .filter(Boolean)
 
-app.use(cors({
+// Ensure production Netlify origins are always allowed even if env vars differ
+defaultOrigins.forEach((origin) => {
+  const norm = normalizeOrigin(origin)
+  if (!allowedOrigins.includes(norm)) {
+    allowedOrigins.push(norm)
+  }
+})
+
+const corsOptions = {
   origin: (origin, callback) => {
-    // Allow server-side requests without origin and allow configured origins.
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow server-side requests without origin and tools like Postman/curl.
+    if (!origin) return callback(null, true)
+
+    const reqOrigin = normalizeOrigin(origin)
+    const isAllowed =
+      allowedOrigins.includes(reqOrigin) ||
+      /^https:\/\/([a-z0-9-]+--)?meatdashboard\.netlify\.app$/.test(reqOrigin) ||
+      /^https:\/\/([a-z0-9-]+--)?dashboardbyalvi\.netlify\.app$/.test(reqOrigin)
+
+    if (isAllowed) {
       callback(null, true)
     } else {
+      console.warn(`[CORS] Rejected origin: ${origin}`)
       callback(new Error(`CORS origin denied: ${origin}`))
     }
   },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   optionsSuccessStatus: 200
-}))
-app.options('*', cors())
+}
+
+app.use(cors(corsOptions))
+app.options('*', cors(corsOptions))
 app.use(express.json())
 
 // ── Routes ──
