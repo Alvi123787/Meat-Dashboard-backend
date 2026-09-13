@@ -3,6 +3,7 @@ import cors from 'cors'
 import connectDB from './db.js'
 import entryRoutes from './routes/entries.js'
 import expenseRoutes from './routes/expenses.js'
+import dueRoutes from './routes/dues.js'
 import authRoutes from './routes/auth.js'
 import authMiddleware from './middleware/authMiddleware.js'
 
@@ -87,6 +88,7 @@ const requireDb = async (req, res, next) => {
 
 app.use('/api/entries', requireDb, authMiddleware, entryRoutes)
 app.use('/api/expenses', requireDb, authMiddleware, expenseRoutes)
+app.use('/api/dues', requireDb, authMiddleware, dueRoutes)
 
 // ── 404 handler ──
 app.use((req, res) => {
